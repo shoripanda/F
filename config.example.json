@@ -1,0 +1,15 @@
+{
+  "mode": "paper",
+  "followed_traders": [
+    {
+      "trader_id": "alice",
+      "enabled": true,
+      "paper_buy_usd": 25.0
+    },
+    {
+      "trader_id": "bob",
+      "enabled": true,
+      "paper_buy_usd": 10.0
+    }
+  ]
+}
