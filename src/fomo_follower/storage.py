@@ -15,6 +15,12 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _datetime_text(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def _decimal_text(value: Decimal | float | int | str) -> str:
     if isinstance(value, Decimal):
         return format(value, "f")
@@ -72,7 +78,7 @@ class SQLiteTransaction:
                 event.chain,
                 event.token_address,
                 _decimal_text(event.price_usd),
-                event.executed_at.isoformat(),
+                _datetime_text(event.executed_at),
                 event.source,
                 _optional_decimal_text(event.sell_fraction),
                 1 if accepted else 0,
@@ -163,12 +169,13 @@ class SQLiteTransaction:
                 _decimal_text(notional_usd),
                 _optional_decimal_text(cost_basis_released_usd),
                 _optional_decimal_text(realized_pnl_usd),
-                event.executed_at.isoformat(),
+                _datetime_text(event.executed_at),
                 created_at or _utc_now_iso(),
             ),
         )
 
     def upsert_last_price(self, event: TradeEvent) -> None:
+        observed_at = _datetime_text(event.executed_at)
         self.conn.execute(
             """
             INSERT INTO token_prices (
@@ -178,12 +185,13 @@ class SQLiteTransaction:
                 price_usd = excluded.price_usd,
                 observed_at = excluded.observed_at,
                 source = excluded.source
+            WHERE excluded.observed_at >= token_prices.observed_at
             """,
             (
                 event.chain,
                 event.token_address,
                 _decimal_text(event.price_usd),
-                event.executed_at.isoformat(),
+                observed_at,
                 event.source,
             ),
         )
@@ -199,12 +207,20 @@ class SQLiteStore:
         self.database.initialize()
 
     @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        conn = self.database.connect()
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
     def transaction(self) -> Iterator[SQLiteTransaction]:
         with self.database.transaction() as conn:
             yield SQLiteTransaction(conn)
 
     def event_exists(self, event_id: str) -> bool:
-        with self.database.connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT 1 FROM events WHERE event_id = ? LIMIT 1", (event_id,)
             ).fetchone()
@@ -212,7 +228,7 @@ class SQLiteStore:
 
     def list_positions(self, *, include_zero: bool = True) -> list[dict]:
         where = "" if include_zero else "WHERE CAST(quantity AS REAL) > 0"
-        with self.database.connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 f"""
                 SELECT trader_id, chain, token_address, quantity, cost_basis_usd, updated_at
@@ -243,7 +259,7 @@ class SQLiteStore:
             where = "WHERE trader_id = ?"
             params.append(trader_id)
         params.append(limit)
-        with self.database.connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 f"""
                 SELECT id, event_id, trader_id, side, chain, token_address,
@@ -261,7 +277,7 @@ class SQLiteStore:
 
     def list_events(self, *, limit: int = 100) -> list[dict]:
         limit = max(1, min(limit, 1000))
-        with self.database.connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT event_id, trader_id, side, chain, token_address,
