@@ -1,15 +1,29 @@
 {
   "mode": "paper",
+  "fomo_profile_url": "https://fomo.family/profile/Hiroki",
   "followed_traders": [
     {
       "trader_id": "alice",
       "enabled": true,
-      "paper_buy_usd": 25.0
+      "paper_buy_usd": 25.0,
+      "live_buy_usd": 10.0
     },
     {
       "trader_id": "bob",
       "enabled": true,
-      "paper_buy_usd": 10.0
+      "paper_buy_usd": 10.0,
+      "live_buy_usd": 10.0
     }
-  ]
+  ],
+  "live": {
+    "enabled": false,
+    "executor": null,
+    "max_order_usd": 25.0,
+    "max_daily_notional_usd": 100.0,
+    "max_slippage_bps": 100,
+    "stale_signal_seconds": 60,
+    "require_token_allowlist": true,
+    "allowed_tokens": [],
+    "kill_switch": true
+  }
 }
