@@ -14,6 +14,7 @@ class Side(str, Enum):
 class Mode(str, Enum):
     PAPER = "paper"
     ALERT = "alert"
+    LIVE = "live"
 
 
 class TradeEvent(BaseModel):
@@ -34,7 +35,7 @@ class TradeEvent(BaseModel):
     def reject_unsafe_sources(cls, value: str) -> str:
         blocked = {"scraper", "browser-bot", "credential-capture"}
         if value.lower() in blocked:
-            raise ValueError("Automated/scraped FOMO sources are not supported")
+            raise ValueError("Unauthorized/scraped FOMO sources are not supported")
         return value
 
 
@@ -42,11 +43,26 @@ class FollowRule(BaseModel):
     trader_id: str = Field(min_length=1, max_length=200)
     enabled: bool = True
     paper_buy_usd: float = Field(default=10.0, gt=0, le=100_000)
+    live_buy_usd: float | None = Field(default=None, gt=0, le=100_000)
+
+
+class LiveRiskConfig(BaseModel):
+    enabled: bool = False
+    executor: str | None = None
+    max_order_usd: float = Field(default=25.0, gt=0, le=100_000)
+    max_daily_notional_usd: float = Field(default=100.0, gt=0, le=1_000_000)
+    max_slippage_bps: int = Field(default=100, ge=0, le=5000)
+    stale_signal_seconds: int = Field(default=60, ge=1, le=86_400)
+    require_token_allowlist: bool = True
+    allowed_tokens: list[str] = Field(default_factory=list)
+    kill_switch: bool = True
 
 
 class AppConfig(BaseModel):
     mode: Mode = Mode.PAPER
+    fomo_profile_url: str | None = None
     followed_traders: list[FollowRule] = Field(default_factory=list)
+    live: LiveRiskConfig = Field(default_factory=LiveRiskConfig)
 
 
 class PaperPosition(BaseModel):
@@ -63,3 +79,4 @@ class EventResult(BaseModel):
     event: TradeEvent
     paper_action: dict | None = None
     review_action: dict | None = None
+    live_action: dict | None = None
