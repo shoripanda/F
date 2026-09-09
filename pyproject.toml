@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fomo-follower"
-version = "0.1.0"
-description = "Follower-filtered FOMO trade signal assistant with paper trading and manual review modes"
+version = "0.2.0"
+description = "Follower-filtered FOMO trade signal assistant with persistent SQLite paper trading and manual review modes"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.116,<1",
