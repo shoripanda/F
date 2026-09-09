@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 
+from .executor import DisabledLiveExecutor, LiveExecutor, request_from_event
 from .models import AppConfig, EventResult, Mode, Side, TradeEvent
 from .storage import SQLiteStore, SQLiteTransaction
 
@@ -11,11 +13,41 @@ from .storage import SQLiteStore, SQLiteTransaction
 class FollowerEngine:
     config: AppConfig
     store: SQLiteStore
+    live_executor: LiveExecutor = field(default_factory=DisabledLiveExecutor)
 
     def _rule_for(self, trader_id: str):
         for rule in self.config.followed_traders:
             if rule.enabled and rule.trader_id == trader_id:
                 return rule
+        return None
+
+    def _live_block_reason(self, event: TradeEvent, live_buy_usd: float | None) -> str | None:
+        live = self.config.live
+        if not live.enabled:
+            return "live_execution_disabled"
+        if live.kill_switch:
+            return "live_kill_switch_enabled"
+        if live.executor is None:
+            return "live_executor_not_configured"
+        if self.live_executor.name == "disabled":
+            return "live_executor_not_available"
+
+        executed_at = event.executed_at
+        if executed_at.tzinfo is None:
+            executed_at = executed_at.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - executed_at.astimezone(timezone.utc)).total_seconds()
+        if age_seconds > live.stale_signal_seconds:
+            return "stale_signal"
+
+        if live.require_token_allowlist and event.token_address not in live.allowed_tokens:
+            return "token_not_allowlisted"
+
+        if event.side == Side.BUY:
+            if live_buy_usd is None:
+                return "live_buy_amount_not_configured"
+            if live_buy_usd > live.max_order_usd:
+                return "live_order_exceeds_max_order_usd"
+
         return None
 
     def handle(self, event: TradeEvent) -> EventResult:
@@ -31,9 +63,7 @@ class FollowerEngine:
 
             rule = self._rule_for(event.trader_id)
             if rule is None:
-                tx.insert_event(
-                    event, accepted=False, reason="trader_not_followed"
-                )
+                tx.insert_event(event, accepted=False, reason="trader_not_followed")
                 return EventResult(
                     accepted=False,
                     mode=self.config.mode,
@@ -60,7 +90,55 @@ class FollowerEngine:
                     },
                 )
 
+            if self.config.mode == Mode.LIVE:
+                return self._live_trade(event, rule.live_buy_usd, tx)
+
             return self._paper_trade(event, rule.paper_buy_usd, tx)
+
+    def _live_trade(
+        self,
+        event: TradeEvent,
+        live_buy_usd: float | None,
+        tx: SQLiteTransaction,
+    ) -> EventResult:
+        block_reason = self._live_block_reason(event, live_buy_usd)
+        if block_reason is not None:
+            tx.insert_event(event, accepted=False, reason=block_reason)
+            tx.upsert_last_price(event)
+            return EventResult(
+                accepted=False,
+                mode=self.config.mode,
+                reason=block_reason,
+                event=event,
+                live_action={"status": "blocked"},
+            )
+
+        request = request_from_event(
+            event,
+            buy_notional_usd=live_buy_usd,
+            max_slippage_bps=self.config.live.max_slippage_bps,
+        )
+        result = self.live_executor.execute(request)
+        accepted = result.status in {"submitted", "filled"}
+        reason = "live_order_submitted" if accepted else "live_order_failed"
+        tx.insert_event(event, accepted=accepted, reason=reason)
+        tx.upsert_last_price(event)
+
+        return EventResult(
+            accepted=accepted,
+            mode=self.config.mode,
+            reason=reason,
+            event=event,
+            live_action={
+                "status": result.status,
+                "provider": result.provider,
+                "order_id": result.order_id,
+                "tx_hash": result.tx_hash,
+                "filled_quantity": result.filled_quantity,
+                "filled_notional_usd": result.filled_notional_usd,
+                "message": result.message,
+            },
+        )
 
     def _paper_trade(
         self,
@@ -68,9 +146,7 @@ class FollowerEngine:
         paper_buy_usd: float,
         tx: SQLiteTransaction,
     ) -> EventResult:
-        current = tx.get_position(
-            event.trader_id, event.chain, event.token_address
-        )
+        current = tx.get_position(event.trader_id, event.chain, event.token_address)
         current_quantity = current.quantity if current else Decimal("0")
         current_cost = current.cost_basis_usd if current else Decimal("0")
         price = Decimal(str(event.price_usd))
@@ -84,11 +160,7 @@ class FollowerEngine:
             updated_quantity = current_quantity + quantity
             updated_cost = current_cost + notional
 
-            tx.insert_trade(
-                event=event,
-                quantity=quantity,
-                notional_usd=notional,
-            )
+            tx.insert_trade(event=event, quantity=quantity, notional_usd=notional)
             tx.upsert_position(
                 trader_id=event.trader_id,
                 chain=event.chain,
