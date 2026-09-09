@@ -101,7 +101,8 @@ class Database:
 
     def initialize(self) -> None:
         """Create the schema idempotently and verify its version."""
-        with self.connect() as conn:
+        conn = self.connect()
+        try:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.executescript(SCHEMA_SQL)
             row = conn.execute(
@@ -118,6 +119,11 @@ class Database:
                     f"{row['value']} (expected {SCHEMA_VERSION})"
                 )
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
