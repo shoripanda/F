@@ -41,7 +41,7 @@ FOMOが将来、第三者アプリ向けの公式API/SDKと自動取引権限を
 
 `event_id` を一度処理したら、同じイベントを再度適用しない。
 
-本番運用ではインメモリSetではなくSQLite/PostgreSQL等へ移行する。
+Phase 1ではインメモリSetを利用している。Phase 2ではSQLiteの `events.event_id` をPRIMARY KEYとして永続的に重複防止する。
 
 ### 4. Paper Engine
 
@@ -96,13 +96,20 @@ SELL:
 - alert mode
 - REST API
 
-### Phase 2
+### Phase 2 — persistence design defined
+
+SQLite永続化の詳細設計は [`PERSISTENCE_DESIGN.md`](PERSISTENCE_DESIGN.md) を正とする。
 
 - SQLite persistence
+- restart-safe event deduplication
 - audit log
+- persistent paper positions
+- paper trade history
+- realized / unrealized PnL
+- last observed token price
+- per-trader paper performance analytics
 - webhook authentication
 - notification delivery (Telegram/Discord/email)
-- per-trader paper performance analytics
 - stale-signal detection
 
 ### Phase 3 — only if officially permitted
